@@ -175,19 +175,65 @@ async function run(){
     if(!f){res.innerHTML='<div class="card"><div class="err">נא לבחור קובץ HAR.</div></div>';return;}
     fd.append('har',f);
   }
-  btn.disabled=true; btn.innerHTML='<span class="spinner"></span> סורק…';
-  res.innerHTML='';
+  btn.disabled=true; res.innerHTML='';
+  const t0 = Date.now();
+  const setLabel = ()=>{ const s=Math.round((Date.now()-t0)/1000);
+    btn.innerHTML='<span class="spinner"></span> סורק… ('+s+' שניות)'; };
+  setLabel();
+  const tick = setInterval(setLabel, 1000);
   try{
-    const r = await fetch('/api/scan',{method:'POST',body:fd});
-    const data = await r.json();
-    if(!r.ok){ throw new Error(data.detail || 'שגיאה'); }
-    res.innerHTML = render(data);
+    // 1) start the scan job — returns immediately, before any proxy timeout.
+    const start = await fetchJSON('/api/scan', {method:'POST', body:fd});
+    if(!start.job_id) throw new Error('לא התקבל מזהה סריקה מהשרת.');
+    // 2) poll until it finishes; each request is fast, so the ~100s gateway
+    //    timeout never applies no matter how long the scan itself runs.
+    const report = await pollJob(start.job_id);
+    res.innerHTML = render(report);
     res.scrollIntoView({behavior:'smooth',block:'start'});
   }catch(e){
     res.innerHTML='<div class="card"><div class="err">'+esc(e.message)+'</div></div>';
   }finally{
+    clearInterval(tick);
     btn.disabled=false; btn.textContent='סרוק';
   }
+}
+
+const sleep = ms => new Promise(r=>setTimeout(r, ms));
+
+// Map a non-JSON / gateway response (Cloudflare 524/502, Access login page…) to
+// a Hebrew explanation, so the user never sees a raw "Unexpected token '<'".
+function gatewayMsg(status){
+  if(status===524 || status===504)
+    return 'הסריקה ארכה זמן רב מדי ונקטעה בשער (timeout). הקטינו עומק או מספר עמודים, או בטלו "רינדור עם דפדפן".';
+  if(status===502 || status===503)
+    return 'השירות אינו זמין כרגע (שגיאת שער '+status+'). ודאו שהקונטיינר רץ ותקין.';
+  if(status===401 || status===403)
+    return 'פג תוקף ההזדהות מול Cloudflare Access. רעננו את העמוד והתחברו מחדש.';
+  return 'התקבלה תשובה שאינה JSON (סטטוס '+status+'). ככל הנראה שגיאת שער/הזדהות — לא האפליקציה.';
+}
+
+// fetch that guarantees a JSON body or throws a meaningful error.
+async function fetchJSON(url, opts){
+  const r = await fetch(url, opts);
+  const ct = r.headers.get('content-type') || '';
+  if(!ct.includes('application/json')) throw new Error(gatewayMsg(r.status));
+  const data = await r.json();
+  if(!r.ok) throw new Error(data.detail || ('שגיאה (סטטוס '+r.status+')'));
+  return data;
+}
+
+// Poll a scan job until it's done or errors. Client-side safety cap on top of
+// the server's own scan timeout.
+async function pollJob(jobId){
+  const deadline = Date.now() + 6*60*1000;
+  while(Date.now() < deadline){
+    await sleep(2000);
+    const j = await fetchJSON('/api/scan/'+encodeURIComponent(jobId));
+    if(j.status==='running') continue;
+    if(j.status==='error') throw new Error(j.detail || 'שגיאה במהלך הסריקה.');
+    if(j.status==='done') return j.report;
+  }
+  throw new Error('הסריקה נמשכת זמן רב מהצפוי. נסו שוב עם היקף קטן יותר.');
 }
 
 function render(d){

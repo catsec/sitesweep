@@ -52,6 +52,7 @@ and set `SITESWEEP_ALLOW_RENDER=0`.
 | `SITESWEEP_ALLOW_RENDER` | `1` | allow headless-Chrome rendering |
 | `SITESWEEP_MAX_PAGES` | `50` | hard cap on pages per URL scan |
 | `SITESWEEP_MAX_HAR_MB` | `40` | max uploaded HAR size |
+| `SITESWEEP_SCAN_TIMEOUT` | `300` | hard wall-clock cap (seconds) on a single scan job |
 
 ---
 
