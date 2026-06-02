@@ -30,14 +30,13 @@ services:
     # ports:
     #   - "127.0.0.1:8000:8000"
 
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 2G
-        reservations:
-          cpus: "0.5"
-          memory: 512M
+    # Resource limits use the legacy (non-swarm) keys instead of `deploy.resources`.
+    # Synology Container Manager rejects CPU limits set via NanoCPUs ("NanoCPUs can
+    # not be set") because its kernel lacks CFS CPU-quota support. `cpu_shares` is a
+    # relative weight (works everywhere); the memory cap is the guardrail that matters.
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpu_shares: 1024
 
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -83,11 +82,8 @@ services:
       sitesweep:
         condition: service_healthy
 
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 128M
+    mem_limit: 128m
+    cpu_shares: 256
 
     restart: unless-stopped
     logging:

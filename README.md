@@ -143,6 +143,10 @@ supported.
 > RAM-hungry. On NAS units with ≤2 GB RAM, set `SITESWEEP_ALLOW_RENDER=0` in the
 > compose `environment:` block (HAR + static scans still work) or raise the
 > memory limit to suit your model.
+>
+> The compose file caps CPU with `cpu_shares` (a relative weight) rather than a hard
+> `cpus:` limit on purpose — Synology's kernel lacks CFS CPU-quota support, so a hard
+> limit fails with *"NanoCPUs can not be set."*
 
 ---
 

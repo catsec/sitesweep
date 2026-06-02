@@ -11,6 +11,7 @@ on:
     paths-ignore:
       - "**.md"
       - "LICENSE"
+      - "docker-compose.yml"   # runtime config, not baked into the image
   pull_request:
     branches: [main]
   workflow_dispatch:
