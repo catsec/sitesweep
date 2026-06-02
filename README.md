@@ -53,7 +53,7 @@ and set `SITESWEEP_ALLOW_RENDER=0`.
 | `SITESWEEP_MAX_PAGES` | `50` | hard cap on pages per URL scan |
 | `SITESWEEP_MAX_HAR_MB` | `40` | max uploaded HAR size |
 | `SITESWEEP_SCAN_TIMEOUT` | `300` | hard wall-clock cap (seconds) on a single scan job |
-| `SERPAPI_KEY` | — | enable the Google-index check via SerpAPI (see below) |
+| `SERPAPI_KEY` | — | enable the search-index check via SerpAPI (see below) |
 
 ---
 
@@ -202,10 +202,10 @@ escalate on their own.
 
 Two optional **site-level** checks catch what a live crawl alone can miss — a page
 that was indexed or archived with violation content even though the live HTML now
-looks clean (index lag, or a hack that was cleaned but still lingers in Google /
-the Wayback Machine):
+looks clean (index lag, or a hack that was cleaned but still lingers in the search
+index / the Wayback Machine):
 
-- **Google index check** (`--index-check`, UI checkbox) — searches the index for
+- **Search-index check** (`--index-check`, UI checkbox) — searches the index for
   violation content **hosted on the domain itself**. The critical guard: a result
   only counts if its host equals the target domain (or a subdomain). A site merely
   *mentioning* a brand, or sharing a keyword, is never counted — so a restaurant
@@ -222,10 +222,9 @@ declare the live site infected on their own; they only corroborate a live findin
 
 ### Setting up the index check (SerpAPI)
 
-The index check queries Google for violation content **hosted on the target domain**
-(`site:<domain> …`). Google's own Custom Search JSON API **dropped whole-web search
-for new engines in 2026**, so sitesweep uses **SerpAPI**, which runs the same query
-through an official API:
+The index check searches for violation content **hosted on the target domain**
+(`site:<domain> …`) via **SerpAPI**, which runs the query through an official
+search API:
 
 1. Sign up at <https://serpapi.com/> and copy your API key.
 2. Put it in `.env` (Docker reads it via `docker-compose.yml`) or export it for the CLI:
@@ -234,8 +233,10 @@ through an official API:
    ```
 3. The UI checkbox enables itself once the server sees the key (via `/api/capabilities`).
 
-SerpAPI's free tier is ~100 searches/month; sitesweep sends ~1 query per violation
-category, so a scan costs a handful. Without a key the index check simply self-skips —
+SerpAPI's free tier is 250 searches/month; sitesweep sends ~1 query per violation
+category, so a scan costs a handful. If the quota is exhausted (or any other provider
+error occurs) the scan still completes and the report says so. Without a key the index
+check simply self-skips —
 the Wayback history check still runs keyless.
 
 ## Technology fingerprinting

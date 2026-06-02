@@ -408,10 +408,10 @@ MESSAGES: dict[str, dict[str, callable]] = {
         "he": lambda p: f"לתשומת לב: {p['count']} אלמנטים מוסתרים ללא תוכן מפר — ככל הנראה רכיבי ממשק לגיטימיים (תפריטים, נגישות)",
     },
     "INDEX_VIOLATION": {
-        "en": lambda p: f"{p['count']} page(s) indexed by Google under this domain with "
+        "en": lambda p: f"{p['count']} page(s) indexed under this domain with "
                         f"{', '.join(_cat(c, 'en') for c in p['categories'])} content — possible historical "
                         f"compromise or index residue; verify against the live site",
-        "he": lambda p: f"נמצאו {p['count']} עמודים מאונדקסים בגוגל תחת הדומיין עם תוכן "
+        "he": lambda p: f"נמצאו {p['count']} עמודים מאונדקסים תחת הדומיין עם תוכן "
                         f"{', '.join(_cat(c, 'he') for c in p['categories'])} — ייתכן פריצה היסטורית או שאריות "
                         f"באינדקס; יש לאמת מול האתר החי.",
     },
@@ -967,16 +967,15 @@ class NullProvider:
 
 
 class SerpApiProvider:
-    """SerpAPI backend — runs real `site:<domain>` Google queries over the whole web
-    through an official API (not SERP scraping). On quota/4xx/network error it
-    returns [] and sets `errored` (never raises).
-
-    Note: Google's own Custom Search JSON API no longer supports whole-web search
-    for new engines (changed in 2026), so SerpAPI is the supported provider here."""
+    """Search-index backend via SerpAPI — runs real `site:<domain>` web queries
+    through an official search API (not SERP scraping). Never raises: on any
+    failure it returns [] and records why in `errored` / `error_reason`
+    (e.g. monthly quota exhausted, invalid key, network error)."""
 
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.errored = False
+        self.error_reason: str | None = None
 
     async def site_search(self, domain: str, query: str) -> list[SearchHit]:
         import httpx
@@ -986,12 +985,24 @@ class SerpApiProvider:
             async with httpx.AsyncClient() as c:
                 r = await c.get("https://serpapi.com/search.json",
                                 params=params, timeout=15.0)
-            if r.status_code >= 400:
+            try:
+                body = r.json()
+            except Exception:  # noqa: BLE001
+                body = {}
+            # SerpAPI signals problems via HTTP status and/or an "error" field
+            # (e.g. 429 + "ran out of searches" when the monthly quota is spent).
+            if r.status_code == 429:
                 self.errored = True
+                self.error_reason = body.get("error") or "monthly search limit reached"
                 return []
-            items = r.json().get("organic_results", []) or []
-        except Exception:  # noqa: BLE001
+            if r.status_code >= 400 or body.get("error"):
+                self.errored = True
+                self.error_reason = body.get("error") or f"HTTP {r.status_code}"
+                return []
+            items = body.get("organic_results", []) or []
+        except Exception as e:  # noqa: BLE001
             self.errored = True
+            self.error_reason = f"network error ({type(e).__name__})"
             return []
         return [SearchHit(title=it.get("title", ""), url=it.get("link", ""),
                           snippet=it.get("snippet", "")) for it in items]
@@ -1032,8 +1043,12 @@ async def index_check(domain: str, provider: SearchProvider,
         for hit in await provider.site_search(domain, query):
             if _host_on_domain(hit.url, domain):
                 indexed.append({"category": cat, "url": hit.url, "title": hit.title})
-    status = "provider_error" if getattr(provider, "errored", False) else "ok"
-    return {"status": status, "indexed_violations": indexed, "queries_run": queries}
+        if getattr(provider, "errored", False):
+            break  # quota / auth / network failure — stop spending queries
+    if getattr(provider, "errored", False):
+        return {"status": "provider_error", "indexed_violations": indexed,
+                "queries_run": queries, "error": getattr(provider, "error_reason", None)}
+    return {"status": "ok", "indexed_violations": indexed, "queries_run": queries}
 
 
 _CDX_FILTER = "casino|slot|bet|gambl|judi|togel|baccarat|viagra|cialis"
@@ -1064,6 +1079,21 @@ async def history_check(domain: str) -> dict:
     return {"status": "ok", "archived_violations": archived,
             "first_seen": times[0][:8] if times else None,
             "last_seen": times[-1][:8] if times else None, "count": len(archived)}
+
+
+def index_error_text(reason: str | None, lang: str) -> str:
+    """Turn a provider failure reason into a clear, user-facing message."""
+    r = (reason or "").lower()
+    if any(k in r for k in ("run out", "ran out", "limit", "exceeded", "quota", "429")):
+        return ("בדיקת האינדקס לא הושלמה — נוצלה מכסת החיפושים החודשית של שירות החיפוש."
+                if lang == "he" else
+                "index check incomplete — the search service's monthly quota is used up.")
+    if any(k in r for k in ("invalid", "unauthor", "401", "api key")):
+        return ("בדיקת האינדקס נכשלה — מפתח ה-API אינו תקין." if lang == "he"
+                else "index check failed — invalid API key.")
+    detail = reason or ("שגיאת שירות" if lang == "he" else "service error")
+    return (f"בדיקת האינדקס נכשלה: {detail}" if lang == "he"
+            else f"index check failed: {detail}")
 
 
 def site_findings(report: "SiteReport") -> list[Finding]:
@@ -1337,8 +1367,7 @@ def report_to_dict(report: SiteReport, lang: str = "he") -> dict:
         text = next((render_finding(f, lang) for f in sf
                      if f.code in ("INDEX_VIOLATION", "INDEX_CLEAN", "INDEX_SKIPPED")), "")
         if ic.get("status") == "provider_error" and not text:
-            text = ("בדיקת האינדקס נכשלה (חריגת מכסה או שגיאת שירות)." if lang == "he"
-                    else "index check failed (quota or service error)")
+            text = index_error_text(ic.get("error"), lang)
         out["index_check"] = {
             "status": ic.get("status"),
             "indexed_violations": ic.get("indexed_violations", []),
