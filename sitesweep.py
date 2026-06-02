@@ -966,36 +966,13 @@ class NullProvider:
         return []
 
 
-class GoogleCSEProvider:
-    """Google Custom Search JSON API. The CSE must be set to search the entire web.
-    On quota/4xx/network error it returns [] and sets `errored` (never raises)."""
-
-    def __init__(self, api_key: str, cse_id: str):
-        self.api_key = api_key
-        self.cse_id = cse_id
-        self.errored = False
-
-    async def site_search(self, domain: str, query: str) -> list[SearchHit]:
-        import httpx
-        params = {"key": self.api_key, "cx": self.cse_id,
-                  "q": f"site:{domain} {query}", "num": 10}
-        try:
-            async with httpx.AsyncClient() as c:
-                r = await c.get("https://www.googleapis.com/customsearch/v1",
-                                params=params, timeout=15.0)
-            if r.status_code >= 400:
-                self.errored = True
-                return []
-            items = r.json().get("items", []) or []
-        except Exception:  # noqa: BLE001
-            self.errored = True
-            return []
-        return [SearchHit(title=it.get("title", ""), url=it.get("link", ""),
-                          snippet=it.get("snippet", "")) for it in items]
-
-
 class SerpApiProvider:
-    """Optional SerpAPI backend. Same contract as GoogleCSEProvider."""
+    """SerpAPI backend — runs real `site:<domain>` Google queries over the whole web
+    through an official API (not SERP scraping). On quota/4xx/network error it
+    returns [] and sets `errored` (never raises).
+
+    Note: Google's own Custom Search JSON API no longer supports whole-web search
+    for new engines (changed in 2026), so SerpAPI is the supported provider here."""
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -1021,9 +998,7 @@ class SerpApiProvider:
 
 
 def get_search_provider() -> SearchProvider:
-    """Pick a provider from the environment: Google first, then SerpAPI, else Null."""
-    if os.environ.get("GOOGLE_API_KEY") and os.environ.get("GOOGLE_CSE_ID"):
-        return GoogleCSEProvider(os.environ["GOOGLE_API_KEY"], os.environ["GOOGLE_CSE_ID"])
+    """Pick a provider from the environment: SerpAPI if configured, else Null."""
     if os.environ.get("SERPAPI_KEY"):
         return SerpApiProvider(os.environ["SERPAPI_KEY"])
     return NullProvider()
@@ -1410,7 +1385,7 @@ def main() -> int:
     ap.add_argument("--lang", choices=["en", "he"], default="en", help="report language")
     ap.add_argument("--index-check", action="store_true",
                     help="query the search index for violation content on the domain "
-                         "(needs GOOGLE_API_KEY+GOOGLE_CSE_ID or SERPAPI_KEY)")
+                         "(needs SERPAPI_KEY)")
     ap.add_argument("--history-check", action="store_true",
                     help="query the Wayback archive for historical violation URLs (no key)")
     args = ap.parse_args()

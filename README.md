@@ -53,8 +53,7 @@ and set `SITESWEEP_ALLOW_RENDER=0`.
 | `SITESWEEP_MAX_PAGES` | `50` | hard cap on pages per URL scan |
 | `SITESWEEP_MAX_HAR_MB` | `40` | max uploaded HAR size |
 | `SITESWEEP_SCAN_TIMEOUT` | `300` | hard wall-clock cap (seconds) on a single scan job |
-| `GOOGLE_API_KEY` + `GOOGLE_CSE_ID` | — | enable the Google index check (see below) |
-| `SERPAPI_KEY` | — | alternative search backend (used only if the Google vars are unset) |
+| `SERPAPI_KEY` | — | enable the Google-index check via SerpAPI (see below) |
 
 ---
 
@@ -221,18 +220,23 @@ index/history shows violations on the domain, the verdict becomes **SUSPICIOUS**
 INFECTED — i.e. "historical or index-lag, confirm manually." These checks never
 declare the live site infected on their own; they only corroborate a live finding.
 
-### Setting up the Google index check
+### Setting up the index check (SerpAPI)
 
-1. Create a **Programmable Search Engine** at <https://programmablesearchengine.google.com/>,
-   and in its settings turn on **"Search the entire web."** Copy the **Search engine ID**
-   → `GOOGLE_CSE_ID`.
-2. In Google Cloud, enable the **Custom Search API** and create an **API key**
-   → `GOOGLE_API_KEY`.
-3. Put both in `.env` (Docker reads them via `docker-compose.yml`) or export them for
-   the CLI. Free tier is ~100 queries/day; sitesweep sends ~1 query per violation
-   category, so a scan costs a handful of queries.
+The index check queries Google for violation content **hosted on the target domain**
+(`site:<domain> …`). Google's own Custom Search JSON API **dropped whole-web search
+for new engines in 2026**, so sitesweep uses **SerpAPI**, which runs the same query
+through an official API:
 
-`SERPAPI_KEY` is an alternative backend, used only when the Google vars are absent.
+1. Sign up at <https://serpapi.com/> and copy your API key.
+2. Put it in `.env` (Docker reads it via `docker-compose.yml`) or export it for the CLI:
+   ```
+   SERPAPI_KEY=your-serpapi-key
+   ```
+3. The UI checkbox enables itself once the server sees the key (via `/api/capabilities`).
+
+SerpAPI's free tier is ~100 searches/month; sitesweep sends ~1 query per violation
+category, so a scan costs a handful. Without a key the index check simply self-skips —
+the Wayback history check still runs keyless.
 
 ## Technology fingerprinting
 

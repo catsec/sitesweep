@@ -25,9 +25,7 @@ services:
       SITESWEEP_MAX_PAGES: "50"
       SITESWEEP_MAX_HAR_MB: "40"
       SITESWEEP_SCAN_TIMEOUT: "300"
-      # Optional — enables the Google index check when set in .env (see README).
-      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
-      GOOGLE_CSE_ID: "${GOOGLE_CSE_ID:-}"
+      # Optional — enables the index check when set in .env (see README).
       SERPAPI_KEY: "${SERPAPI_KEY:-}"
 
     # No host port is published: cloudflared reaches the app over the internal
