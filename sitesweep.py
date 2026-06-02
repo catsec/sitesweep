@@ -966,6 +966,11 @@ class NullProvider:
         return []
 
 
+# SerpAPI returns these as an "error" field when a query simply has zero hits —
+# for a site: query that's a clean empty result, not a provider failure.
+_SERP_NO_RESULTS = re.compile(r"hasn'?t returned any results|no results|didn'?t match", re.I)
+
+
 class SerpApiProvider:
     """Search-index backend via SerpAPI — runs real `site:<domain>` web queries
     through an official search API (not SERP scraping). Never raises: on any
@@ -995,9 +1000,12 @@ class SerpApiProvider:
                 self.errored = True
                 self.error_reason = body.get("error") or "monthly search limit reached"
                 return []
-            if r.status_code >= 400 or body.get("error"):
+            err = body.get("error")
+            if err and _SERP_NO_RESULTS.search(err):
+                return []  # zero results for this query — clean, not a failure
+            if r.status_code >= 400 or err:
                 self.errored = True
-                self.error_reason = body.get("error") or f"HTTP {r.status_code}"
+                self.error_reason = err or f"HTTP {r.status_code}"
                 return []
             items = body.get("organic_results", []) or []
         except Exception as e:  # noqa: BLE001
