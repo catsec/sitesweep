@@ -1,0 +1,100 @@
+services:
+  sitesweep:
+    build: .
+    image: sitesweep:1.0
+    container_name: sitesweep
+
+    # --- hardening ---
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      # Chromium writes its profile/temp here; HAR uploads are handled in memory.
+      - /tmp:size=1g,mode=1777
+    privileged: false
+    shm_size: "256m"
+
+    environment:
+      SITESWEEP_ALLOW_RENDER: "1"     # set "0" to disable headless Chrome
+      SITESWEEP_MAX_PAGES: "50"
+      SITESWEEP_MAX_HAR_MB: "40"
+
+    # No host port is published: cloudflared reaches the app over the internal
+    # network at http://sitesweep:8000. Uncomment only for local debugging.
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - sitesweep_net
+
+  # Cloudflare Tunnel — terminates auth (Cloudflare Access) and publishes the app.
+  # In the Cloudflare Zero Trust dashboard, point this tunnel's public hostname
+  # (e.g. sitesweep.catsec.com) to the origin service:  http://sitesweep:8000
+  cloudflared:
+    image: cloudflare/cloudflared:2026.5.2
+    container_name: sitesweep-tunnel
+    command: tunnel --no-autoupdate run
+
+    # Token is read from .env (never commit it). TUNNEL_TOKEN keeps it out of
+    # the process arguments (unlike passing --token on the command line).
+    environment:
+      TUNNEL_TOKEN: "${CF_TUNNEL_TOKEN:?set CF_TUNNEL_TOKEN in .env}"
+
+    # --- hardening ---
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    privileged: false
+
+    depends_on:
+      sitesweep:
+        condition: service_healthy
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - sitesweep_net
+
+networks:
+  sitesweep_net:
+    driver: bridge

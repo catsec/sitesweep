@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sitesweep · CatSec — רם פרס · סורק הפרות והזרקות SEO</title>
+<link rel="icon" type="image/png" href="/catsec.png">
+<style>
+  :root{
+    --bg:#eef1f5; --card:#ffffff; --ink:#1b2433; --muted:#5b6b7f;
+    --line:#dfe5ec; --brand:#21618c; --brand-d:#184a6b;
+    --infected:#c0392b; --infected-bg:#fbe9e7;
+    --suspicious:#b9770e; --suspicious-bg:#fdf3e2;
+    --clean:#1e8449; --clean-bg:#e7f6ec;
+    --shadow:0 6px 24px rgba(20,40,70,.08);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Heebo","Assistant","Segoe UI","Arial Hebrew",system-ui,Arial,sans-serif;
+    line-height:1.6;-webkit-font-smoothing:antialiased}
+  header{background:linear-gradient(135deg,var(--brand-d),var(--brand));color:#fff;
+    padding:26px 20px;box-shadow:var(--shadow)}
+  .wrap{max-width:880px;margin:0 auto;padding:0 16px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{width:44px;height:44px;border-radius:10px;background:rgba(255,255,255,.16);
+    display:grid;place-items:center;overflow:hidden}
+  .logo img{width:100%;height:100%;object-fit:contain;display:block}
+  .brand h1{margin:0;font-size:22px;font-weight:800;letter-spacing:.3px}
+  .brand p{margin:2px 0 0;font-size:13.5px;opacity:.9}
+  main{max-width:880px;margin:-18px auto 60px;padding:0 16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    box-shadow:var(--shadow);padding:22px;margin-bottom:18px}
+  .tabs{display:flex;gap:8px;margin-bottom:18px}
+  .tab{flex:1;padding:11px;border:1px solid var(--line);background:#f7f9fb;border-radius:10px;
+    cursor:pointer;text-align:center;font-weight:700;color:var(--muted);transition:.15s}
+  .tab.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+  label{display:block;font-weight:700;font-size:14px;margin:0 0 6px}
+  input[type=text],input[type=number]{width:100%;padding:12px 14px;border:1px solid var(--line);
+    border-radius:10px;font-size:15px;font-family:inherit;background:#fcfdfe}
+  input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(33,97,140,.12)}
+  .row{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px}
+  .row > div{flex:1;min-width:140px}
+  .opts{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px}
+  .chk{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--muted);cursor:pointer}
+  .chk input{width:18px;height:18px;accent-color:var(--brand)}
+  .file-drop{border:2px dashed var(--line);border-radius:12px;padding:26px;text-align:center;
+    color:var(--muted);background:#fafcfe;cursor:pointer}
+  .file-drop.has-file{border-color:var(--clean);color:var(--clean);background:var(--clean-bg)}
+  .hint{font-size:12.5px;color:var(--muted);margin-top:8px}
+  .btn{margin-top:18px;width:100%;padding:14px;border:0;border-radius:11px;background:var(--brand);
+    color:#fff;font-size:16px;font-weight:800;cursor:pointer;transition:.15s}
+  .btn:hover{background:var(--brand-d)} .btn:disabled{opacity:.6;cursor:default}
+  .hidden{display:none}
+  .spinner{width:22px;height:22px;border:3px solid rgba(255,255,255,.4);border-top-color:#fff;
+    border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-5px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .verdict{display:flex;align-items:center;gap:14px;padding:18px 20px;border-radius:14px;margin-bottom:6px}
+  .verdict .badge{font-size:22px;font-weight:900;padding:6px 16px;border-radius:10px;white-space:nowrap}
+  .v-INFECTED{background:var(--infected-bg)} .v-INFECTED .badge{background:var(--infected);color:#fff}
+  .v-SUSPICIOUS{background:var(--suspicious-bg)} .v-SUSPICIOUS .badge{background:var(--suspicious);color:#fff}
+  .v-CLEAN{background:var(--clean-bg)} .v-CLEAN .badge{background:var(--clean);color:#fff}
+  .v-ERROR{background:#eceff1} .v-ERROR .badge{background:#607d8b;color:#fff}
+  .verdict .vtext h2{margin:0;font-size:18px} .verdict .vtext p{margin:3px 0 0;color:var(--muted);font-size:14px}
+  .meta{font-size:13px;color:var(--muted);margin:10px 2px 0}
+  .reco{background:#f4f8fb;border-right:4px solid var(--brand);border-radius:8px;padding:14px 16px;margin:16px 0;font-size:14.5px}
+  .page{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:12px}
+  .page .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+  .pill{font-size:12px;font-weight:800;padding:3px 10px;border-radius:20px}
+  .p-INFECTED{background:var(--infected-bg);color:var(--infected)}
+  .p-SUSPICIOUS{background:var(--suspicious-bg);color:var(--suspicious)}
+  .p-CLEAN{background:var(--clean-bg);color:var(--clean)}
+  .p-ERROR{background:#eceff1;color:#607d8b}
+  .purl{font-size:13px;color:var(--muted);word-break:break-all;direction:ltr;text-align:right}
+  ul.findings{list-style:none;margin:6px 0 0;padding:0}
+  ul.findings li{display:flex;gap:9px;align-items:flex-start;padding:5px 0;font-size:14px}
+  .dot{width:9px;height:9px;border-radius:50%;margin-top:8px;flex:0 0 auto}
+  .s-high{background:var(--infected)} .s-med{background:var(--suspicious)}
+  .s-low{background:#7f8c8d} .s-info{background:#b0bec5}
+  .links{margin-top:8px}
+  .links code,.chips code{direction:ltr;display:inline-block}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+  .chips code{background:#fbe9e7;color:var(--infected);border:1px solid #f3c9c2;
+    padding:4px 9px;border-radius:7px;font-size:12.5px}
+  .sec-title{font-weight:800;margin:18px 0 4px;font-size:15px}
+  .cloak{padding:12px 14px;border-radius:10px;font-size:14px;margin-top:14px}
+  .cloak.bad{background:var(--infected-bg);color:var(--infected)}
+  .cloak.ok{background:var(--clean-bg);color:var(--clean)}
+  .err{background:var(--infected-bg);color:var(--infected);padding:14px 16px;border-radius:10px;font-weight:600}
+  footer{text-align:center;color:var(--muted);font-size:12.5px;padding:0 16px 30px}
+  .toolbar{display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px}
+  .ghost{background:#f0f3f6;border:1px solid var(--line);color:var(--brand);border-radius:9px;
+    padding:8px 14px;font-weight:700;font-size:13px;cursor:pointer}
+</style>
+</head>
+<body>
+<header><div class="wrap"><div class="brand">
+  <div class="logo"><img src="/catsec.png" alt="CatSec"></div>
+  <div><h1>sitesweep</h1><p>סורק הפרות תוכן והזרקות SEO — בדיקת אתר או קובץ HAR</p></div>
+</div></div></header>
+
+<main>
+  <div class="card">
+    <div class="tabs">
+      <div class="tab active" data-mode="url" onclick="setMode('url')">בדיקת כתובת אתר</div>
+      <div class="tab" data-mode="har" onclick="setMode('har')">העלאת קובץ HAR</div>
+    </div>
+
+    <div id="pane-url">
+      <label for="url">כתובת האתר לבדיקה</label>
+      <input type="text" id="url" placeholder="example.co.il" dir="ltr" autocomplete="off">
+      <div class="row">
+        <div><label for="depth">עומק סריקה</label>
+          <input type="number" id="depth" value="1" min="0" max="2"></div>
+        <div><label for="maxp">מספר עמודים מרבי</label>
+          <input type="number" id="maxp" value="20" min="1" max="50"></div>
+      </div>
+      <div class="opts">
+        <label class="chk"><input type="checkbox" id="render"> רינדור עם דפדפן (Chrome) — לזיהוי הזרקות JavaScript</label>
+        <label class="chk"><input type="checkbox" id="cloak" checked> בדיקת הסוואה (Googlebot)</label>
+      </div>
+    </div>
+
+    <div id="pane-har" class="hidden">
+      <label>קובץ HAR (שמור מ-DevTools עם תוכן התגובות)</label>
+      <div class="file-drop" id="drop" onclick="document.getElementById('harfile').click()">
+        <div id="droptext">גררו לכאן קובץ .har או לחצו לבחירה</div>
+      </div>
+      <input type="file" id="harfile" accept=".har,application/json" class="hidden">
+      <div class="hint">הקובץ מנותח בזיכרון בלבד ואינו נשמר בשרת.</div>
+    </div>
+
+    <button class="btn" id="go" onclick="run()">סרוק</button>
+  </div>
+
+  <div id="result"></div>
+</main>
+
+<footer>sitesweep · שירות של CatSec — רם פרס · המנוע מנתח תוכן שמוגש בפועל, עם שקלול אותות כדי להימנע מזיהויי שווא.</footer>
+
+<script>
+let MODE = "url";
+function setMode(m){
+  MODE = m;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.mode===m));
+  document.getElementById('pane-url').classList.toggle('hidden', m!=='url');
+  document.getElementById('pane-har').classList.toggle('hidden', m!=='har');
+}
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('harfile');
+fileInput.addEventListener('change', ()=>showFile(fileInput.files[0]));
+['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('has-file')}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();if(e==='dragleave')drop.classList.remove('has-file')}));
+drop.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0]; if(f){fileInput.files=ev.dataTransfer.files; showFile(f);}});
+function showFile(f){ if(!f)return; drop.classList.add('has-file');
+  document.getElementById('droptext').textContent = '✓ '+f.name; }
+
+const SEV = {high:'s-high',med:'s-med',low:'s-low',info:'s-info'};
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+async function run(){
+  const btn = document.getElementById('go');
+  const res = document.getElementById('result');
+  const fd = new FormData();
+  fd.append('mode', MODE);
+  if(MODE==='url'){
+    const u=document.getElementById('url').value.trim();
+    if(!u){res.innerHTML='<div class="card"><div class="err">נא להזין כתובת אתר.</div></div>';return;}
+    fd.append('url',u);
+    fd.append('depth',document.getElementById('depth').value);
+    fd.append('max_pages',document.getElementById('maxp').value);
+    fd.append('render',document.getElementById('render').checked);
+    fd.append('cloak',document.getElementById('cloak').checked);
+  } else {
+    const f=fileInput.files[0];
+    if(!f){res.innerHTML='<div class="card"><div class="err">נא לבחור קובץ HAR.</div></div>';return;}
+    fd.append('har',f);
+  }
+  btn.disabled=true; btn.innerHTML='<span class="spinner"></span> סורק…';
+  res.innerHTML='';
+  try{
+    const r = await fetch('/api/scan',{method:'POST',body:fd});
+    const data = await r.json();
+    if(!r.ok){ throw new Error(data.detail || 'שגיאה'); }
+    res.innerHTML = render(data);
+    res.scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(e){
+    res.innerHTML='<div class="card"><div class="err">'+esc(e.message)+'</div></div>';
+  }finally{
+    btn.disabled=false; btn.textContent='סרוק';
+  }
+}
+
+function render(d){
+  let h = '<div class="card">';
+  h += '<div class="toolbar"><button class="ghost" onclick="window.print()">הדפסה / שמירה ל-PDF</button></div>';
+  h += `<div class="verdict v-${d.verdict}">
+      <span class="badge">${esc(d.verdict_label)}</span>
+      <div class="vtext"><h2>${esc(d.verdict_desc)}</h2>
+      <p>יעד: <span dir="ltr">${esc(d.target)}</span> · עמודים שנבדקו: ${d.page_count}</p></div>
+    </div>`;
+  h += `<div class="reco"><b>המלצה:</b> ${esc(d.recommendation)}</div>`;
+
+  if(d.cloaking){
+    h += `<div class="cloak ${d.cloaking.cloaked?'bad':'ok'}">${esc(d.cloaking.text)}</div>`;
+  }
+
+  const flagged = d.pages.filter(p=>p.findings.length || p.verdict==='INFECTED' || p.verdict==='SUSPICIOUS' || p.verdict==='ERROR');
+  if(flagged.length){
+    h += '<div class="sec-title">ממצאים לפי עמוד</div>';
+    flagged.forEach(p=>{
+      h += `<div class="page"><div class="head">
+        <span class="pill p-${p.verdict}">${esc(p.verdict_label||p.verdict)}</span>
+        <span class="purl">${esc(p.url)}</span></div>`;
+      if(p.error){ h += `<div class="meta">${esc(p.error)}</div>`; }
+      if(p.findings.length){
+        h += '<ul class="findings">';
+        p.findings.forEach(f=>{ h += `<li><span class="dot ${SEV[f.severity]||'s-info'}"></span><span>${esc(f.text)}</span></li>`; });
+        h += '</ul>';
+      }
+      if(p.violation_links && p.violation_links.length){
+        h += '<div class="links chips">';
+        p.violation_links.slice(0,12).forEach(l=>{ h += `<code>${esc(l)}</code>`; });
+        h += '</div>';
+      }
+      h += '</div>';
+    });
+  } else {
+    h += '<div class="cloak ok">כל העמודים שנבדקו נקיים.</div>';
+  }
+
+  if(d.request_violations && d.request_violations.length){
+    h += '<div class="sec-title">דומיינים מפרים בבקשות הרשת</div><div class="chips">';
+    d.request_violations.forEach(x=>{ h += `<code>${esc(x)}</code>`; });
+    h += '</div>';
+  }
+  if(d.ioc_domains && d.ioc_domains.length){
+    h += `<div class="sec-title">דומיינים לחסימה (IoC) — ${d.ioc_domains.length}</div><div class="chips">`;
+    d.ioc_domains.forEach(x=>{ h += `<code>${esc(x)}</code>`; });
+    h += '</div>';
+  }
+  h += '</div>';
+  return h;
+}
+</script>
+</body>
+</html>

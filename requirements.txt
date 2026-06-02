@@ -1,0 +1,10 @@
+# sitesweep — core engine + web app
+httpx[http2]>=0.27
+selectolax>=0.3.21
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+
+# Optional — only needed for --render / "רינדור עם דפדפן" (headless Chrome).
+# After install, fetch the browser once:  playwright install chromium
+playwright>=1.44
