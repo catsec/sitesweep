@@ -55,6 +55,97 @@ and set `SITESWEEP_ALLOW_RENDER=0`.
 
 ---
 
+## Install the container, per platform
+
+The runtime is the same everywhere — two containers (`sitesweep` + `cloudflared`)
+defined in `docker-compose.yml`, pulling the multi-arch image from GHCR. Only the
+way you install Docker and start the project differs.
+
+**Common to every platform**
+
+1. Get the project files (you need `docker-compose.yml` and `.env.example`):
+   ```bash
+   git clone https://github.com/catsec/sitesweep.git
+   cd sitesweep
+   cp .env.example .env        # paste your Cloudflare tunnel token into CF_TUNNEL_TOKEN
+   ```
+2. If the GHCR package is **private**, authenticate once before pulling
+   (create a GitHub token with the `read:packages` scope):
+   ```bash
+   echo "$GHCR_TOKEN" | docker login ghcr.io -u <your-github-user> --password-stdin
+   ```
+   If the package has been made public, you can skip this.
+3. No host port is published by default — the app is reached through the
+   Cloudflare Tunnel hostname you configure in the Zero Trust dashboard
+   (origin `http://sitesweep:8000`). For **local testing without the tunnel**,
+   uncomment the `ports:` block in `docker-compose.yml` to expose
+   `127.0.0.1:8000` and open <http://127.0.0.1:8000>.
+
+### Linux
+
+```bash
+# Install Docker Engine + the Compose plugin (Debian/Ubuntu shown)
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER"     # log out/in so you can run docker without sudo
+
+# from the cloned repo:
+docker compose up -d
+docker compose logs -f              # watch startup; Ctrl-C to stop watching
+```
+
+### macOS
+
+```bash
+# Install Docker Desktop (includes Compose v2)
+brew install --cask docker          # then launch Docker.app once to start the engine
+# (Apple Silicon pulls the arm64 image automatically; Intel Macs pull amd64)
+
+# from the cloned repo:
+docker compose up -d
+```
+
+### Windows
+
+Install **Docker Desktop for Windows** (WSL 2 backend recommended), then from a
+PowerShell prompt in the cloned repo:
+
+```powershell
+docker compose up -d
+docker compose logs -f
+```
+
+If you don't have `git`, download the repo Zip from GitHub (**Code → Download ZIP**),
+extract it, and run the same commands inside the extracted folder. Edit `.env`
+in any text editor (e.g. Notepad) and paste the tunnel token.
+
+### Synology NAS (DSM 7)
+
+Use **Container Manager** (Package Center → install *Container Manager*; on
+DSM 7.0–7.1 it's called *Docker*). Works on **64-bit** models — x86_64 (Intel/AMD,
+pulls `amd64`) and arm64 (aarch64, pulls `arm64`). 32-bit ARM models are not
+supported.
+
+1. Copy the project folder to the NAS (e.g. `/volume1/docker/sitesweep`) via
+   File Station or an SMB share — include `docker-compose.yml` and your
+   filled-in `.env`.
+2. In **Container Manager → Project → Create**:
+   - **Path:** the folder you copied.
+   - **Source:** *Use existing docker-compose.yml*.
+   - Container Manager reads `.env` from that folder for `CF_TUNNEL_TOKEN`.
+3. Build/Run the project. Container Manager pulls the image and starts both
+   services; the tunnel connects outbound, so **no router port-forwarding is
+   needed** and you should not map a NAS port to the app.
+4. If the GHCR package is private, add a registry login under
+   **Container Manager → Registry → Settings** (registry `ghcr.io`, your GitHub
+   user, a `read:packages` token) before creating the project.
+
+> Note: the image bundles Chromium for the "render with browser" option, which is
+> RAM-hungry. On NAS units with ≤2 GB RAM, set `SITESWEEP_ALLOW_RENDER=0` in the
+> compose `environment:` block (HAR + static scans still work) or raise the
+> memory limit to suit your model.
+
+---
+
 ## Run locally (macOS, venv)
 
 ```bash

@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # Docs-only changes don't affect the image, so skip the (slow, emulated)
+    # multi-arch build for them. Tag pushes always build regardless.
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
   pull_request:
     branches: [main]
   workflow_dispatch:
