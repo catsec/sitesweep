@@ -81,6 +81,8 @@
   .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
   .chips code{background:#fbe9e7;color:var(--infected);border:1px solid #f3c9c2;
     padding:4px 9px;border-radius:7px;font-size:12.5px}
+  .chips.tech code{background:#eef3f8;color:var(--brand);border-color:#d4e0ea}
+  .chk.disabled{opacity:.55}
   .sec-title{font-weight:800;margin:18px 0 4px;font-size:15px}
   .cloak{padding:12px 14px;border-radius:10px;font-size:14px;margin-top:14px}
   .cloak.bad{background:var(--infected-bg);color:var(--infected)}
@@ -117,6 +119,8 @@
       <div class="opts">
         <label class="chk"><input type="checkbox" id="render"> רינדור עם דפדפן (Chrome) — לזיהוי הזרקות JavaScript</label>
         <label class="chk"><input type="checkbox" id="cloak" checked> בדיקת הסוואה (Googlebot)</label>
+        <label class="chk disabled" id="idxlbl" title="לא הוגדר מפתח API לחיפוש בשרת"><input type="checkbox" id="idxchk" disabled> בדיקת אינדקס בגוגל</label>
+        <label class="chk"><input type="checkbox" id="histchk"> בדיקת היסטוריה (Wayback)</label>
       </div>
     </div>
 
@@ -157,6 +161,12 @@ function showFile(f){ if(!f)return; drop.classList.add('has-file');
 const SEV = {high:'s-high',med:'s-med',low:'s-low',info:'s-info'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
+// Enable the Google-index checkbox only if the server has a search provider configured.
+fetch('/api/capabilities').then(r=>r.json()).then(c=>{
+  const cb=document.getElementById('idxchk'), lbl=document.getElementById('idxlbl');
+  if(c.search_provider){ cb.disabled=false; lbl.classList.remove('disabled'); lbl.removeAttribute('title'); }
+}).catch(()=>{});
+
 async function run(){
   const btn = document.getElementById('go');
   const res = document.getElementById('result');
@@ -170,6 +180,8 @@ async function run(){
     fd.append('max_pages',document.getElementById('maxp').value);
     fd.append('render',document.getElementById('render').checked);
     fd.append('cloak',document.getElementById('cloak').checked);
+    fd.append('index_check',document.getElementById('idxchk').checked);
+    fd.append('history_check',document.getElementById('histchk').checked);
   } else {
     const f=fileInput.files[0];
     if(!f){res.innerHTML='<div class="card"><div class="err">נא לבחור קובץ HAR.</div></div>';return;}
@@ -284,6 +296,39 @@ function render(d){
     d.ioc_domains.forEach(x=>{ h += `<code>${esc(x)}</code>`; });
     h += '</div>';
   }
+
+  if(d.technologies && d.technologies.length){
+    h += '<div class="sec-title">טכנולוגיות שזוהו</div><div class="chips tech">';
+    d.technologies.forEach(t=>{
+      const ver = t.version ? ' '+esc(t.version) : '';
+      h += `<code title="${esc(t.category_label||'')}">${esc(t.name)}${ver}</code>`;
+    });
+    h += '</div>';
+  }
+
+  if(d.index_check){
+    const ic = d.index_check, bad = ic.indexed_violations && ic.indexed_violations.length;
+    h += '<div class="sec-title">ממצאי אינדקס בגוגל</div>';
+    h += `<div class="cloak ${bad?'bad':'ok'}">${esc(ic.text||'')}</div>`;
+    if(bad){
+      h += '<div class="chips">';
+      ic.indexed_violations.slice(0,20).forEach(v=>{ h += `<code>${esc(v.url)}</code>`; });
+      h += '</div>';
+    }
+  }
+
+  if(d.history_check){
+    const hc = d.history_check, bad = hc.archived_violations && hc.archived_violations.length;
+    h += '<div class="sec-title">ממצאי היסטוריה (Wayback)</div>';
+    h += `<div class="cloak ${bad?'bad':'ok'}">${esc(hc.text||'')}</div>`;
+    if(bad){
+      h += '<div class="chips">';
+      hc.archived_violations.slice(0,12).forEach(v=>{
+        h += `<code>${esc((v.timestamp||'').slice(0,8))} ${esc(v.url)}</code>`; });
+      h += '</div>';
+    }
+  }
+
   h += '</div>';
   return h;
 }

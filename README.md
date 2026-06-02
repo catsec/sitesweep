@@ -53,6 +53,8 @@ and set `SITESWEEP_ALLOW_RENDER=0`.
 | `SITESWEEP_MAX_PAGES` | `50` | hard cap on pages per URL scan |
 | `SITESWEEP_MAX_HAR_MB` | `40` | max uploaded HAR size |
 | `SITESWEEP_SCAN_TIMEOUT` | `300` | hard wall-clock cap (seconds) on a single scan job |
+| `GOOGLE_API_KEY` + `GOOGLE_CSE_ID` | — | enable the Google index check (see below) |
+| `SERPAPI_KEY` | — | alternative search backend (used only if the Google vars are unset) |
 
 ---
 
@@ -180,6 +182,8 @@ sitesweep.py [URL] [options]
   --depth N          crawl depth (default 1)
   --max-pages N      page cap (default 25)
   --no-cloak-check   skip the Googlebot cloaking diff
+  --index-check      query the search index for violation content on the domain
+  --history-check    query the Wayback archive for historical violation URLs
   --format text|md|json
   --lang en|he
   -o FILE            write report to file
@@ -194,6 +198,49 @@ else CLEAN (תקין). Bare hidden elements, lone weak keywords, and ordinary an
 never reach a verdict on their own — they only count alongside real corroboration.
 UA cloaking (different content to Googlebot) or violation domains in network requests
 escalate on their own.
+
+## Search-index & history exposure
+
+Two optional **site-level** checks catch what a live crawl alone can miss — a page
+that was indexed or archived with violation content even though the live HTML now
+looks clean (index lag, or a hack that was cleaned but still lingers in Google /
+the Wayback Machine):
+
+- **Google index check** (`--index-check`, UI checkbox) — searches the index for
+  violation content **hosted on the domain itself**. The critical guard: a result
+  only counts if its host equals the target domain (or a subdomain). A site merely
+  *mentioning* a brand, or sharing a keyword, is never counted — so a restaurant
+  named *asiatico* is not flagged because gambling pages about "slot a tema asiatico"
+  exist elsewhere. Needs a search provider (below); without one it self-skips.
+- **Wayback history check** (`--history-check`, UI checkbox) — queries the Internet
+  Archive CDX API (free, no key) for archived violation URLs on the domain, with the
+  same host guard, and reports the first/last seen dates.
+
+**Verdict impact is deliberately conservative:** if the live pages are CLEAN but the
+index/history shows violations on the domain, the verdict becomes **SUSPICIOUS**, not
+INFECTED — i.e. "historical or index-lag, confirm manually." These checks never
+declare the live site infected on their own; they only corroborate a live finding.
+
+### Setting up the Google index check
+
+1. Create a **Programmable Search Engine** at <https://programmablesearchengine.google.com/>,
+   and in its settings turn on **"Search the entire web."** Copy the **Search engine ID**
+   → `GOOGLE_CSE_ID`.
+2. In Google Cloud, enable the **Custom Search API** and create an **API key**
+   → `GOOGLE_API_KEY`.
+3. Put both in `.env` (Docker reads them via `docker-compose.yml`) or export them for
+   the CLI. Free tier is ~100 queries/day; sitesweep sends ~1 query per violation
+   category, so a scan costs a handful of queries.
+
+`SERPAPI_KEY` is an alternative backend, used only when the Google vars are absent.
+
+## Technology fingerprinting
+
+Every scan also reports the **stack behind the site** — CMS / page builder / e-commerce
+(WordPress, Elementor, WooCommerce, Shopify, Wix, Joomla, Drupal…), notable WP
+plugins/themes and their versions where exposed, JS libraries, server and CDN (from
+response headers). This is **informational only** and never affects the score or verdict;
+it's there to speed up remediation and risk profiling.
 
 ## Limitations
 

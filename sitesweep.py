@@ -34,9 +34,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field, asdict
+from typing import Protocol
 from urllib.parse import urljoin, urlparse
 
 # ----------------------------------------------------------------------------
@@ -125,6 +127,172 @@ SCRIPT_RANGES = {
 
 
 # ----------------------------------------------------------------------------
+# Technology fingerprinting knowledge base (informational only)
+# ----------------------------------------------------------------------------
+
+# Fixed signatures. A tech is detected if ANY html token is present, or any of
+# its (header, value-regex) pairs matches. Version, when discoverable, is filled
+# separately (generator metas, versioned asset filenames) — see fingerprint_tech.
+TECH_SIGNATURES = [
+    {"name": "WordPress", "category": "cms",
+     "html": ["wp-content", "wp-includes", "/wp-json"]},
+    {"name": "Elementor", "category": "page-builder",
+     "html": ["data-elementor", "/wp-content/plugins/elementor", "elementor-"],
+     "asset": "plugins/elementor"},
+    {"name": "WooCommerce", "category": "ecommerce",
+     "html": ["woocommerce", "/wp-content/plugins/woocommerce"],
+     "asset": "plugins/woocommerce"},
+    {"name": "Shopify", "category": "ecommerce",
+     "html": ["cdn.shopify.com", "shopify.theme"],
+     "headers": [("x-shopify-stage", r".")]},
+    {"name": "Wix", "category": "cms",
+     "html": ["static.wixstatic.com"],
+     "headers": [("x-wix-request-id", r"."), ("server", r"\bPepyaka\b")]},
+    {"name": "Joomla", "category": "cms",
+     "html": ["/media/jui/", "com_content", "/media/system/js/"]},
+    {"name": "Drupal", "category": "cms",
+     "html": ["/sites/default/", "drupal.settings", "drupal-settings-json"],
+     "headers": [("x-generator", r"Drupal")]},
+    {"name": "jQuery", "category": "js-lib", "html": ["jquery"]},
+    {"name": "React", "category": "js-lib",
+     "html": ["data-reactroot", "react.production.min.js", "react-dom"]},
+    {"name": "Vue", "category": "js-lib",
+     "html": ["vue.min.js", "vue.runtime", "__vue__"]},
+    {"name": "Cloudflare", "category": "cdn", "html": [],
+     "headers": [("cf-ray", r"."), ("server", r"cloudflare")]},
+]
+
+TECH_CATEGORY_NAMES = {
+    "cms": {"en": "CMS", "he": "מערכת ניהול תוכן"},
+    "page-builder": {"en": "page builder", "he": "בונה עמודים"},
+    "ecommerce": {"en": "e-commerce", "he": "מסחר"},
+    "plugin": {"en": "plugin", "he": "תוסף"},
+    "theme": {"en": "theme", "he": "תבנית"},
+    "server": {"en": "server", "he": "שרת"},
+    "cdn": {"en": "CDN", "he": "CDN"},
+    "js-lib": {"en": "JS library", "he": "ספריית JS"},
+}
+
+
+def _tech_cat(c: str, lang: str) -> str:
+    return TECH_CATEGORY_NAMES.get(c, {}).get(lang, c)
+
+
+# Names seen in <meta generator> that are the CMS/platform itself, not a plugin.
+GENERATOR_CATEGORY = {
+    "wordpress": "cms", "joomla": "cms", "drupal": "cms", "wix": "cms",
+    "shopify": "ecommerce", "woocommerce": "ecommerce", "elementor": "page-builder",
+    "blogger": "cms", "ghost": "cms", "hugo": "cms", "squarespace": "cms",
+}
+
+_GENERATOR_RE = re.compile(
+    r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', re.I)
+_VERSION_TAIL_RE = re.compile(r'^(.*?)[\s\-]+v?(\d+(?:\.\d+)+)\s*$')
+_WP_PLUGIN_RE = re.compile(r'/wp-content/plugins/([a-z0-9][a-z0-9\-]*)/', re.I)
+_WP_THEME_RE = re.compile(r'/wp-content/themes/([a-z0-9][a-z0-9\-]*)/', re.I)
+_JQUERY_VER_RE = re.compile(r'jquery[-/.]?(\d+\.\d+(?:\.\d+)?)(?:\.min)?\.js', re.I)
+
+
+def _asset_version(low_html: str, marker: str) -> str | None:
+    """Pull a version from a versioned asset URL, e.g. .../<marker>/...?ver=3.21.0"""
+    m = re.search(re.escape(marker) + r"/[^\"'>\s]*?[?&]ver=(\d+(?:\.\d+)+)", low_html)
+    return m.group(1) if m else None
+
+
+def _slug_title(slug: str) -> str:
+    return slug.replace("-", " ").strip().title()
+
+
+def fingerprint_tech(url: str, html: str, headers: dict[str, str] | None = None) -> list[dict]:
+    """Return [{'name','category','version'|None,'evidence'}], deduped by name.
+
+    Pure: runs on HTML already fetched by the crawler/HAR loader (plus response
+    headers when available). Informational only — callers must never let this
+    influence the verdict or score."""
+    headers = {k.lower(): v for k, v in (headers or {}).items()}
+    low = html.lower()
+    found: dict[str, dict] = {}
+
+    def add(name: str, category: str, version: str | None = None, evidence: str = "") -> None:
+        name = (name or "").strip()
+        if not name:
+            return
+        cur = found.get(name)
+        if cur is None:
+            found[name] = {"name": name, "category": category,
+                           "version": version, "evidence": evidence[:80]}
+        elif version and not cur.get("version"):
+            cur["version"] = version
+            if evidence:
+                cur["evidence"] = evidence[:80]
+
+    # 1) fixed signatures (html tokens / response headers)
+    for sig in TECH_SIGNATURES:
+        hit = next((tok for tok in sig.get("html", []) if tok in low), None)
+        ev = hit
+        if not hit:
+            for hname, pat in sig.get("headers", []):
+                hv = headers.get(hname, "")
+                if hv and re.search(pat, hv, re.I):
+                    hit, ev = True, f"{hname}: {hv}"
+                    break
+        if hit:
+            ver = _asset_version(low, sig["asset"]) if sig.get("asset") else None
+            if sig["name"] == "jQuery":
+                m = (_JQUERY_VER_RE.search(low)
+                     or re.search(r"jquery[^\"'>\s]*?[?&]ver=(\d+(?:\.\d+)+)", low))
+                ver = ver or (m.group(1) if m else None)
+            add(sig["name"], sig["category"], ver, evidence=str(ev))
+
+    # 2) <meta generator> — names the platform and often a plugin + version
+    for content in _GENERATOR_RE.findall(html):
+        content = content.strip()
+        m = _VERSION_TAIL_RE.match(content)
+        gname, gver = (m.group(1).strip(), m.group(2)) if m else (content, None)
+        cat = GENERATOR_CATEGORY.get(gname.lower(), "plugin")
+        add(gname, cat, gver, evidence=f"generator: {content}")
+
+    # 3) WordPress plugin / theme slugs (Elementor & WooCommerce already named)
+    for slug in sorted(set(s.lower() for s in _WP_PLUGIN_RE.findall(html))):
+        if slug in ("elementor", "woocommerce"):
+            continue
+        add(_slug_title(slug), "plugin", _asset_version(low, "plugins/" + slug),
+            evidence=f"/wp-content/plugins/{slug}/")
+    for slug in sorted(set(s.lower() for s in _WP_THEME_RE.findall(html))):
+        add(_slug_title(slug), "theme", _asset_version(low, "themes/" + slug),
+            evidence=f"/wp-content/themes/{slug}/")
+
+    # 4) server / X-Powered-By response headers
+    srv = headers.get("server", "")
+    if srv and "cloudflare" not in srv.lower():
+        nm, _, sv = srv.partition("/")
+        add(nm.strip() or "server", "server", (sv.split()[0] if sv else None),
+            evidence=f"Server: {srv}")
+    xpb = headers.get("x-powered-by", "")
+    if xpb:
+        nm, _, sv = xpb.partition("/")
+        add(nm.strip() or xpb, "server", (sv.split()[0] if sv else None),
+            evidence=f"X-Powered-By: {xpb}")
+
+    # future: map (name, version) -> known CVEs for a risk hint.
+    return list(found.values())
+
+
+def _aggregate_tech(pages) -> list[dict]:
+    """Union of per-page tech, deduped by name, preferring an entry with a version."""
+    out: dict[str, dict] = {}
+    for p in pages:
+        for t in (getattr(p, "tech", None) or []):
+            cur = out.get(t["name"])
+            if cur is None:
+                out[t["name"]] = dict(t)
+            elif t.get("version") and not cur.get("version"):
+                cur["version"] = t["version"]
+                cur["evidence"] = t.get("evidence", cur.get("evidence"))
+    return list(out.values())
+
+
+# ----------------------------------------------------------------------------
 # Data model
 # ----------------------------------------------------------------------------
 
@@ -147,6 +315,7 @@ class PageFinding:
     hidden_blocks: int = 0
     hidden_links: int = 0
     keyword_summary: dict[str, dict[str, int]] = field(default_factory=dict)
+    tech: list[dict] = field(default_factory=list)
     error: str | None = None
 
 
@@ -157,6 +326,9 @@ class SiteReport:
     ioc_domains: list[str] = field(default_factory=list)
     cloaking: dict | None = None
     request_violations: list[str] = field(default_factory=list)
+    technologies: list[dict] = field(default_factory=list)
+    index_check: dict | None = None
+    history_check: dict | None = None
     verdict: str = "CLEAN"
 
     def worst(self) -> str:
@@ -166,6 +338,13 @@ class SiteReport:
         if self.cloaking and self.cloaking.get("cloaked"):
             v = "INFECTED"
         if self.request_violations and order.get(v, 0) < 1:
+            v = "SUSPICIOUS"
+        # Exposure dimension (search index / history) is scored conservatively:
+        # it can only bump a CLEAN live site to SUSPICIOUS ("historical/index-lag —
+        # confirm manually"), never declare the live site INFECTED on its own.
+        if order.get(v, 0) < 1 and (
+                (self.index_check or {}).get("indexed_violations") or
+                (self.history_check or {}).get("archived_violations")):
             v = "SUSPICIOUS"
         return v
 
@@ -227,6 +406,32 @@ MESSAGES: dict[str, dict[str, callable]] = {
     "BARE_HIDDEN": {
         "en": lambda p: f"note: {p['count']} hidden element(s) with no concealed violation content — likely legitimate UI",
         "he": lambda p: f"לתשומת לב: {p['count']} אלמנטים מוסתרים ללא תוכן מפר — ככל הנראה רכיבי ממשק לגיטימיים (תפריטים, נגישות)",
+    },
+    "INDEX_VIOLATION": {
+        "en": lambda p: f"{p['count']} page(s) indexed by Google under this domain with "
+                        f"{', '.join(_cat(c, 'en') for c in p['categories'])} content — possible historical "
+                        f"compromise or index residue; verify against the live site",
+        "he": lambda p: f"נמצאו {p['count']} עמודים מאונדקסים בגוגל תחת הדומיין עם תוכן "
+                        f"{', '.join(_cat(c, 'he') for c in p['categories'])} — ייתכן פריצה היסטורית או שאריות "
+                        f"באינדקס; יש לאמת מול האתר החי.",
+    },
+    "INDEX_CLEAN": {
+        "en": lambda p: "no violation content indexed under the domain",
+        "he": lambda p: "לא נמצא תוכן מפר מאונדקס תחת הדומיין.",
+    },
+    "INDEX_SKIPPED": {
+        "en": lambda p: "index check not performed (no search API key configured)",
+        "he": lambda p: "בדיקת אינדקס לא בוצעה (לא הוגדר מפתח API לחיפוש).",
+    },
+    "HISTORY_VIOLATION": {
+        "en": lambda p: f"the Wayback archive holds {p['count']} gambling/violation URL(s) under the "
+                        f"domain between {p['first_seen']} and {p['last_seen']} — evidence of a historical compromise",
+        "he": lambda p: f"הארכיון (Wayback) מכיל {p['count']} כתובות הימורים/הפרה תחת הדומיין בין "
+                        f"{p['first_seen']} ל-{p['last_seen']} — עדות לפריצה היסטורית.",
+    },
+    "HISTORY_CLEAN": {
+        "en": lambda p: "no violation URLs found in the historical archive",
+        "he": lambda p: "לא נמצאו כתובות מפרות בארכיון ההיסטורי.",
     },
 }
 
@@ -423,7 +628,7 @@ def url_path_violation(url: str) -> str | None:
     return m.group(0) if m else None
 
 
-def analyze_page(url: str, html: str, parser_cls) -> PageFinding:
+def analyze_page(url: str, html: str, parser_cls, headers: dict | None = None) -> PageFinding:
     f = PageFinding(url=url)
     if not html:
         f.verdict, f.error = "ERROR", "empty body"
@@ -513,6 +718,8 @@ def analyze_page(url: str, html: str, parser_cls) -> PageFinding:
         f.verdict = "SUSPICIOUS"
     else:
         f.verdict = "CLEAN"
+    # Informational only — fingerprinting must not influence score/verdict above.
+    f.tech = fingerprint_tech(url, html, headers)
     return f
 
 
@@ -551,15 +758,16 @@ class HttpxFetcher:
         if self.client:
             await self.client.aclose()
 
-    async def fetch(self, url: str, ua: str) -> tuple[int, str, str]:
+    async def fetch(self, url: str, ua: str) -> tuple[int, str, str, dict]:
         try:
             r = await self.client.get(url, headers={"User-Agent": ua},
                                       timeout=15.0, follow_redirects=True)
             ctype = r.headers.get("content-type", "")
             body = r.text if "html" in ctype or not ctype else ""
-            return r.status_code, body, str(r.url)
+            hdrs = {k.lower(): v for k, v in r.headers.items()}
+            return r.status_code, body, str(r.url), hdrs
         except Exception as e:  # noqa: BLE001
-            return 0, "", f"ERROR:{type(e).__name__}:{e}"
+            return 0, "", f"ERROR:{type(e).__name__}:{e}", {}
 
 
 class ChromeFetcher:
@@ -600,7 +808,7 @@ class ChromeFetcher:
         if self._pw:
             await self._pw.stop()
 
-    async def fetch(self, url: str, ua: str) -> tuple[int, str, str]:
+    async def fetch(self, url: str, ua: str) -> tuple[int, str, str, dict]:
         ctx = await self.browser.new_context(user_agent=ua, ignore_https_errors=True)
         try:
             page = await ctx.new_page()
@@ -609,9 +817,10 @@ class ChromeFetcher:
             await page.wait_for_timeout(self.wait_ms)  # let injection JS run
             html = await page.content()
             status = resp.status if resp else 0
-            return status, html, page.url
+            hdrs = {k.lower(): v for k, v in (resp.headers if resp else {}).items()}
+            return status, html, page.url, hdrs
         except Exception as e:  # noqa: BLE001
-            return 0, "", f"ERROR:{type(e).__name__}:{e}"
+            return 0, "", f"ERROR:{type(e).__name__}:{e}", {}
         finally:
             await ctx.close()
 
@@ -637,15 +846,15 @@ def extract_internal_links(html: str, base_url: str, parser_cls) -> list[str]:
 
 
 async def crawl(fetcher, start_url: str, depth: int, max_pages: int,
-                concurrency: int, ua: str, parser_cls) -> list[tuple[str, int, str]]:
-    results: list[tuple[str, int, str]] = []
+                concurrency: int, ua: str, parser_cls) -> list[tuple[str, int, str, dict]]:
+    results: list[tuple[str, int, str, dict]] = []
     visited: set[str] = set()
     sem = asyncio.Semaphore(concurrency)
 
-    async def grab(u: str) -> tuple[str, int, str]:
+    async def grab(u: str) -> tuple[str, int, str, dict]:
         async with sem:
-            st, body, _final = await fetcher.fetch(u, ua)
-        return (u, st, body)
+            st, body, _final, hdrs = await fetcher.fetch(u, ua)
+        return (u, st, body, hdrs)
 
     frontier = [start_url]
     for level in range(depth + 1):
@@ -658,7 +867,7 @@ async def crawl(fetcher, start_url: str, depth: int, max_pages: int,
         results.extend(fetched)
         if level < depth:
             nxt: list[str] = []
-            for (_u, st, body) in fetched:
+            for (_u, st, body, _h) in fetched:
                 if body and 200 <= st < 300:
                     nxt.extend(extract_internal_links(body, _u, parser_cls))
             frontier = nxt
@@ -668,8 +877,8 @@ async def crawl(fetcher, start_url: str, depth: int, max_pages: int,
 
 
 async def cloak_check(fetcher, start_url: str, parser_cls) -> dict:
-    s1, b1, _ = await fetcher.fetch(start_url, DEFAULT_UA)
-    s2, b2, _ = await fetcher.fetch(start_url, GOOGLEBOT_UA)
+    s1, b1, _u1, _h1 = await fetcher.fetch(start_url, DEFAULT_UA)
+    s2, b2, _u2, _h2 = await fetcher.fetch(start_url, GOOGLEBOT_UA)
     f_user = analyze_page(start_url, b1, parser_cls)
     f_bot = analyze_page(start_url, b2, parser_cls)
     user_g = sum(v.get("strong", 0) for v in f_user.keyword_summary.values())
@@ -709,7 +918,9 @@ def load_har_data(data: dict, parser_cls) -> tuple[list[PageFinding], list[str]]
         if not text or url in seen:
             continue
         seen.add(url)
-        pf = analyze_page(url, text, parser_cls)
+        hdrs = {(h.get("name") or "").lower(): h.get("value") or ""
+                for h in (resp.get("headers") or [])}
+        pf = analyze_page(url, text, parser_cls, headers=hdrs)
         pf.status = resp.get("status", 0)
         findings.append(pf)
     return findings, sorted(violation_requests)
@@ -720,6 +931,189 @@ def load_har(path: str, parser_cls) -> tuple[list[PageFinding], list[str]]:
     with open(path, encoding="utf-8", errors="replace") as fh:
         data = json.load(fh)
     return load_har_data(data, parser_cls)
+
+
+# ----------------------------------------------------------------------------
+# Search-index & historical exposure (site-level)
+#
+# Detects whether the *domain itself* is indexed / was archived with violation
+# content — the signal a live crawl can miss (index lag, cloaked-then-removed).
+# Correctness rule: only count results whose host == the target domain (or a
+# subdomain). A page that merely mentions a brand or shares a keyword is never a
+# signal — that is the index-collision false positive this whole tool avoids.
+# ----------------------------------------------------------------------------
+
+# A few Hebrew gambling terms to widen the index query for .il sites.
+INDEX_HE_TERMS = ["הימור", "קזינו", "סלוט"]
+
+
+@dataclass
+class SearchHit:
+    title: str
+    url: str
+    snippet: str
+
+
+class SearchProvider(Protocol):
+    async def site_search(self, domain: str, query: str) -> list[SearchHit]: ...
+
+
+class NullProvider:
+    """Used when no API keys are present. Never raises; yields nothing."""
+    errored = False
+
+    async def site_search(self, domain: str, query: str) -> list[SearchHit]:
+        return []
+
+
+class GoogleCSEProvider:
+    """Google Custom Search JSON API. The CSE must be set to search the entire web.
+    On quota/4xx/network error it returns [] and sets `errored` (never raises)."""
+
+    def __init__(self, api_key: str, cse_id: str):
+        self.api_key = api_key
+        self.cse_id = cse_id
+        self.errored = False
+
+    async def site_search(self, domain: str, query: str) -> list[SearchHit]:
+        import httpx
+        params = {"key": self.api_key, "cx": self.cse_id,
+                  "q": f"site:{domain} {query}", "num": 10}
+        try:
+            async with httpx.AsyncClient() as c:
+                r = await c.get("https://www.googleapis.com/customsearch/v1",
+                                params=params, timeout=15.0)
+            if r.status_code >= 400:
+                self.errored = True
+                return []
+            items = r.json().get("items", []) or []
+        except Exception:  # noqa: BLE001
+            self.errored = True
+            return []
+        return [SearchHit(title=it.get("title", ""), url=it.get("link", ""),
+                          snippet=it.get("snippet", "")) for it in items]
+
+
+class SerpApiProvider:
+    """Optional SerpAPI backend. Same contract as GoogleCSEProvider."""
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.errored = False
+
+    async def site_search(self, domain: str, query: str) -> list[SearchHit]:
+        import httpx
+        params = {"api_key": self.api_key, "engine": "google",
+                  "q": f"site:{domain} {query}", "num": 10}
+        try:
+            async with httpx.AsyncClient() as c:
+                r = await c.get("https://serpapi.com/search.json",
+                                params=params, timeout=15.0)
+            if r.status_code >= 400:
+                self.errored = True
+                return []
+            items = r.json().get("organic_results", []) or []
+        except Exception:  # noqa: BLE001
+            self.errored = True
+            return []
+        return [SearchHit(title=it.get("title", ""), url=it.get("link", ""),
+                          snippet=it.get("snippet", "")) for it in items]
+
+
+def get_search_provider() -> SearchProvider:
+    """Pick a provider from the environment: Google first, then SerpAPI, else Null."""
+    if os.environ.get("GOOGLE_API_KEY") and os.environ.get("GOOGLE_CSE_ID"):
+        return GoogleCSEProvider(os.environ["GOOGLE_API_KEY"], os.environ["GOOGLE_CSE_ID"])
+    if os.environ.get("SERPAPI_KEY"):
+        return SerpApiProvider(os.environ["SERPAPI_KEY"])
+    return NullProvider()
+
+
+def has_search_provider() -> bool:
+    return not isinstance(get_search_provider(), NullProvider)
+
+
+def _host_on_domain(url: str, domain: str) -> bool:
+    """True only if url's host == domain or is a subdomain of it (the FP guard)."""
+    host = urlparse(url).netloc.lower().replace("www.", "")
+    d = domain.lower().replace("www.", "")
+    return bool(host) and (host == d or host.endswith("." + d))
+
+
+async def index_check(domain: str, provider: SearchProvider,
+                      categories: list[str] | None = None) -> dict:
+    """Query the search index for violation content *hosted on* `domain`."""
+    if isinstance(provider, NullProvider):
+        return {"status": "skipped_no_provider", "indexed_violations": [], "queries_run": 0}
+    cats = categories or list(VIOLATIONS)
+    indexed: list[dict] = []
+    queries = 0
+    for cat in cats:
+        terms = VIOLATIONS[cat]["strong"][:8]
+        if cat == "gambling":
+            terms = terms[:6] + INDEX_HE_TERMS
+        query = " OR ".join(f'"{t}"' for t in terms)
+        queries += 1
+        for hit in await provider.site_search(domain, query):
+            if _host_on_domain(hit.url, domain):
+                indexed.append({"category": cat, "url": hit.url, "title": hit.title})
+    status = "provider_error" if getattr(provider, "errored", False) else "ok"
+    return {"status": status, "indexed_violations": indexed, "queries_run": queries}
+
+
+_CDX_FILTER = "casino|slot|bet|gambl|judi|togel|baccarat|viagra|cialis"
+
+
+async def history_check(domain: str) -> dict:
+    """Query the Wayback Machine CDX API for archived violation URLs on the domain."""
+    import httpx
+    d = domain.lower().replace("www.", "")
+    url = ("http://web.archive.org/cdx/search/cdx"
+           f"?url={d}/*&output=json&collapse=urlkey&fl=timestamp,original"
+           f"&filter=original:.*({_CDX_FILTER}).*&limit=10000")
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.get(url, timeout=15.0)
+        rows = r.json()
+    except Exception:  # noqa: BLE001
+        return {"status": "unavailable", "archived_violations": [],
+                "first_seen": None, "last_seen": None, "count": 0}
+    archived: list[dict] = []
+    for row in (rows[1:] if isinstance(rows, list) else []):  # row 0 is the header
+        if len(row) < 2:
+            continue
+        ts, original = row[0], row[1]
+        if _host_on_domain(original, d):
+            archived.append({"url": original, "timestamp": ts})
+    times = sorted(o["timestamp"] for o in archived if o["timestamp"])
+    return {"status": "ok", "archived_violations": archived,
+            "first_seen": times[0][:8] if times else None,
+            "last_seen": times[-1][:8] if times else None, "count": len(archived)}
+
+
+def site_findings(report: "SiteReport") -> list[Finding]:
+    """Site-level findings derived from the exposure checks, rendered at report level."""
+    out: list[Finding] = []
+    ic = report.index_check
+    if ic:
+        if ic.get("status") == "skipped_no_provider":
+            out.append(Finding("INDEX_SKIPPED", "info"))
+        elif ic.get("indexed_violations"):
+            cats = sorted({v["category"] for v in ic["indexed_violations"]})
+            out.append(Finding("INDEX_VIOLATION", "high",
+                               {"count": len(ic["indexed_violations"]), "categories": cats}))
+        elif ic.get("status") == "ok":
+            out.append(Finding("INDEX_CLEAN", "info"))
+    hc = report.history_check
+    if hc and hc.get("status") == "ok":
+        if hc.get("archived_violations"):
+            out.append(Finding("HISTORY_VIOLATION", "med",
+                               {"count": hc.get("count", len(hc["archived_violations"])),
+                                "first_seen": hc.get("first_seen"),
+                                "last_seen": hc.get("last_seen")}))
+        else:
+            out.append(Finding("HISTORY_CLEAN", "info"))
+    return out
 
 
 # ----------------------------------------------------------------------------
@@ -781,6 +1175,22 @@ def render_text(report: SiteReport, color: bool = True, lang: str = "en") -> str
         out.append(f"\n{c('B')}IoC domains ({len(iocs)}):{R}")
         for h in iocs:
             out.append(f"  {h}")
+    if report.technologies:
+        title = "טכנולוגיות שזוהו" if lang == "he" else "Technologies"
+        out.append(f"\n{c('B')}{title}:{R}")
+        for t in report.technologies:
+            ver = f" {t['version']}" if t.get("version") else ""
+            out.append(f"  {t['name']}{ver}  [{_tech_cat(t.get('category', ''), lang)}]")
+    sfs = site_findings(report)
+    if sfs:
+        title = "חשיפה באינדקס/היסטוריה" if lang == "he" else "Index / history exposure"
+        out.append(f"\n{c('B')}{title}:{R}")
+        for fnd in sfs:
+            out.append(f"  - {render_finding(fnd, lang)}")
+        for v in (report.index_check or {}).get("indexed_violations", [])[:8]:
+            out.append(f"      -> {v['url']}")
+        for v in (report.history_check or {}).get("archived_violations", [])[:8]:
+            out.append(f"      -> {v.get('timestamp', '')[:8]} {v['url']}")
     out.append("")
     return "\n".join(out)
 
@@ -811,6 +1221,19 @@ def render_md(report: SiteReport) -> str:
         out.append("")
     if iocs:
         out += ["## IoC domains", ""] + [f"- `{h}`" for h in iocs]
+    if report.technologies:
+        out += ["", "## Technologies", ""]
+        for t in report.technologies:
+            ver = f" {t['version']}" if t.get("version") else ""
+            out.append(f"- **{t['name']}**{ver} — {t.get('category', '')}")
+    sfs = site_findings(report)
+    if sfs:
+        out += ["", "## Index / history exposure", ""]
+        out += [f"- {render_finding(f, 'en')}" for f in sfs]
+        for v in (report.index_check or {}).get("indexed_violations", [])[:12]:
+            out.append(f"  - `{v['url']}`")
+        for v in (report.history_check or {}).get("archived_violations", [])[:12]:
+            out.append(f"  - `{v.get('timestamp', '')[:8]}` `{v['url']}`")
     return "\n".join(out)
 
 
@@ -834,32 +1257,62 @@ def get_parser():
 
 async def scan_url(url: str, depth: int = 1, max_pages: int = 25, concurrency: int = 6,
                    render: bool = False, cloak: bool = True, render_wait: int = 1500,
-                   ua: str = DEFAULT_UA) -> SiteReport:
+                   ua: str = DEFAULT_UA, index_check: bool = False,
+                   history_check: bool = False) -> SiteReport:
     Parser = get_parser()
     report = SiteReport(start_url=url)
+    domain = urlparse(url).netloc.replace("www.", "")
     fetcher = ChromeFetcher(render_wait) if render else HttpxFetcher()
+    # Exposure checks hit external services and are independent of the crawl, so
+    # run them concurrently. globals() sidesteps the param/function name clash.
+    aux_names, aux_coros = [], []
+    if index_check:
+        aux_names.append("index_check")
+        aux_coros.append(globals()["index_check"](domain, get_search_provider()))
+    if history_check:
+        aux_names.append("history_check")
+        aux_coros.append(globals()["history_check"](domain))
+    aux_task = asyncio.gather(*aux_coros) if aux_coros else None
     async with fetcher:
         fetched = await crawl(fetcher, url, depth, max_pages, concurrency, ua, Parser)
         if cloak:
             report.cloaking = await cloak_check(fetcher, url, Parser)
-    for (u, st, body) in fetched:
+    if aux_task is not None:
+        for name, res in zip(aux_names, await aux_task):
+            setattr(report, name, res)
+    for (u, st, body, hdrs) in fetched:
         if st == 0:
             report.pages.append(PageFinding(url=u, status=0, verdict="ERROR", error=body))
         else:
-            pf = analyze_page(u, body, Parser)
+            pf = analyze_page(u, body, Parser, headers=hdrs)
             pf.status = st
             report.pages.append(pf)
+    report.technologies = _aggregate_tech(report.pages)
     report.verdict = report.worst()
     report.ioc_domains = build_iocs(report)
     return report
 
 
-def scan_har_dict(data: dict) -> SiteReport:
+def scan_har_dict(data: dict, domain: str | None = None,
+                  index_check: bool = False, history_check: bool = False) -> SiteReport:
     Parser = get_parser()
     report = SiteReport(start_url="(HAR capture)")
     pages, req = load_har_data(data, Parser)
     report.pages = pages
     report.request_violations = req
+    report.technologies = _aggregate_tech(pages)
+    if domain is None and pages:
+        domain = urlparse(pages[0].url).netloc.replace("www.", "")
+    if domain and (index_check or history_check):
+        async def _aux() -> dict:
+            res: dict = {}
+            if index_check:
+                res["index_check"] = await globals()["index_check"](domain, get_search_provider())
+            if history_check:
+                res["history_check"] = await globals()["history_check"](domain)
+            return res
+        for k, v in asyncio.run(_aux()).items():
+            setattr(report, k, v)
     report.verdict = report.worst()
     report.ioc_domains = build_iocs(report)
     return report
@@ -897,6 +1350,40 @@ def report_to_dict(report: SiteReport, lang: str = "he") -> dict:
             "text": he_cloaking(report.cloaking) if lang == "he" else (
                 "cloaking detected" if report.cloaking["cloaked"] else "no cloaking"),
         }
+
+    out["technologies"] = [
+        {**t, "category_label": _tech_cat(t.get("category", ""), lang)}
+        for t in report.technologies
+    ]
+
+    sf = site_findings(report)
+    if report.index_check is not None:
+        ic = report.index_check
+        text = next((render_finding(f, lang) for f in sf
+                     if f.code in ("INDEX_VIOLATION", "INDEX_CLEAN", "INDEX_SKIPPED")), "")
+        if ic.get("status") == "provider_error" and not text:
+            text = ("בדיקת האינדקס נכשלה (חריגת מכסה או שגיאת שירות)." if lang == "he"
+                    else "index check failed (quota or service error)")
+        out["index_check"] = {
+            "status": ic.get("status"),
+            "indexed_violations": ic.get("indexed_violations", []),
+            "text": text,
+        }
+    if report.history_check is not None:
+        hc = report.history_check
+        text = next((render_finding(f, lang) for f in sf
+                     if f.code in ("HISTORY_VIOLATION", "HISTORY_CLEAN")), "")
+        if hc.get("status") == "unavailable" and not text:
+            text = ("בדיקת ההיסטוריה אינה זמינה כעת." if lang == "he"
+                    else "history check unavailable")
+        out["history_check"] = {
+            "status": hc.get("status"),
+            "count": hc.get("count", 0),
+            "first_seen": hc.get("first_seen"),
+            "last_seen": hc.get("last_seen"),
+            "archived_violations": hc.get("archived_violations", []),
+            "text": text,
+        }
     return out
 
 
@@ -921,12 +1408,18 @@ def main() -> int:
     ap.add_argument("--har", help="analyze a saved .har capture instead of crawling")
     ap.add_argument("--html-file", help="offline: analyze a single local HTML file")
     ap.add_argument("--lang", choices=["en", "he"], default="en", help="report language")
+    ap.add_argument("--index-check", action="store_true",
+                    help="query the search index for violation content on the domain "
+                         "(needs GOOGLE_API_KEY+GOOGLE_CSE_ID or SERPAPI_KEY)")
+    ap.add_argument("--history-check", action="store_true",
+                    help="query the Wayback archive for historical violation URLs (no key)")
     args = ap.parse_args()
 
     # ---- HAR mode ----
     if args.har:
         with open(args.har, encoding="utf-8", errors="replace") as fh:
-            report = scan_har_dict(json.load(fh))
+            report = scan_har_dict(json.load(fh), index_check=args.index_check,
+                                   history_check=args.history_check)
         report.start_url = args.har
 
     # ---- single local file ----
@@ -938,6 +1431,7 @@ def main() -> int:
         html = open(args.html_file, encoding="utf-8", errors="replace").read()
         report = SiteReport(start_url=args.url)
         report.pages.append(analyze_page(args.url, html, Parser))
+        report.technologies = _aggregate_tech(report.pages)
         report.verdict = report.worst()
         report.ioc_domains = build_iocs(report)
 
@@ -950,7 +1444,8 @@ def main() -> int:
             args.url, depth=args.depth, max_pages=args.max_pages,
             concurrency=args.concurrency, render=args.render,
             cloak=not args.no_cloak_check, render_wait=args.render_wait,
-            ua=args.user_agent))
+            ua=args.user_agent, index_check=args.index_check,
+            history_check=args.history_check))
 
     if args.format == "json":
         text = render_json(report)

@@ -9,6 +9,7 @@ the proxy is then fast, regardless of how long the scan itself runs.
 Endpoints:
   GET  /                 Hebrew RTL single-page UI
   GET  /health           liveness probe (for container healthcheck)
+  GET  /api/capabilities {"search_provider": bool} — lets the UI gate the index check
   POST /api/scan         start a scan (URL crawl or HAR upload) -> {"job_id": ...}
   GET  /api/scan/{id}    poll job status -> running | done (+report) | error
 """
@@ -75,15 +76,19 @@ def _prune_jobs() -> None:
             del JOBS[jid]
 
 
-async def _scan_url(u: str, depth: int, max_pages: int, render: bool, cloak: bool) -> dict:
+async def _scan_url(u: str, depth: int, max_pages: int, render: bool, cloak: bool,
+                    index_check: bool, history_check: bool) -> dict:
     report = await ss.scan_url(u, depth=depth, max_pages=max_pages,
-                               render=render, cloak=cloak)
+                               render=render, cloak=cloak,
+                               index_check=index_check, history_check=history_check)
     return ss.report_to_dict(report, "he")
 
 
-async def _scan_har(parsed: dict, filename: str | None) -> dict:
+async def _scan_har(parsed: dict, filename: str | None,
+                    index_check: bool, history_check: bool) -> dict:
     # HAR analysis is CPU-bound and synchronous — keep it off the event loop.
-    report = await asyncio.to_thread(ss.scan_har_dict, parsed)
+    report = await asyncio.to_thread(ss.scan_har_dict, parsed, None,
+                                     index_check, history_check)
     report.start_url = filename or "(HAR capture)"
     return ss.report_to_dict(report, "he")
 
@@ -103,6 +108,12 @@ async def _run_job(job_id: str, coro) -> None:
                         "error": f"שגיאה במהלך הסריקה: {type(e).__name__}: {e}"}
 
 
+@app.get("/api/capabilities")
+async def capabilities() -> dict:
+    """Lets the UI enable/disable the index checkbox based on server config."""
+    return {"search_provider": ss.has_search_provider()}
+
+
 @app.post("/api/scan")
 async def scan_start(
     mode: str = Form("url"),
@@ -111,9 +122,15 @@ async def scan_start(
     max_pages: int = Form(20),
     render: bool = Form(False),
     cloak: bool = Form(True),
+    index_check: bool = Form(False),
+    history_check: bool = Form(False),
     har: UploadFile | None = File(None),
 ):
     """Validate input, start the scan as a background job, return its id."""
+    # The index check only runs when a provider is configured; otherwise the
+    # engine reports skipped_no_provider rather than erroring.
+    do_index = bool(index_check) and ss.has_search_provider()
+    do_history = bool(history_check)
     if mode == "har":
         if har is None:
             raise HTTPException(400, "לא הועלה קובץ HAR")
@@ -126,7 +143,7 @@ async def scan_start(
             raise HTTPException(400, "קובץ ה-HAR אינו תקין (JSON שגוי)")
         if "log" not in parsed or "entries" not in parsed.get("log", {}):
             raise HTTPException(400, "המבנה אינו נראה כקובץ HAR תקין")
-        coro = _scan_har(parsed, har.filename)
+        coro = _scan_har(parsed, har.filename, do_index, do_history)
     else:
         u = (url or "").strip()
         if not u:
@@ -138,7 +155,7 @@ async def scan_start(
         depth = max(0, min(int(depth), 2))
         max_pages = max(1, min(int(max_pages), MAX_PAGES_CAP))
         use_render = bool(render) and ALLOW_RENDER
-        coro = _scan_url(u, depth, max_pages, use_render, bool(cloak))
+        coro = _scan_url(u, depth, max_pages, use_render, bool(cloak), do_index, do_history)
 
     job_id = uuid.uuid4().hex
     JOBS[job_id] = {"status": "running"}

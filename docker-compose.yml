@@ -24,6 +24,11 @@ services:
       SITESWEEP_ALLOW_RENDER: "1"     # set "0" to disable headless Chrome
       SITESWEEP_MAX_PAGES: "50"
       SITESWEEP_MAX_HAR_MB: "40"
+      SITESWEEP_SCAN_TIMEOUT: "300"
+      # Optional — enables the Google index check when set in .env (see README).
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+      GOOGLE_CSE_ID: "${GOOGLE_CSE_ID:-}"
+      SERPAPI_KEY: "${SERPAPI_KEY:-}"
 
     # No host port is published: cloudflared reaches the app over the internal
     # network at http://sitesweep:8000. Uncomment only for local debugging.
