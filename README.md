@@ -18,9 +18,13 @@ trips a verdict. This avoids the index-collision false positives that naive
 
 ```bash
 cp .env.example .env          # then paste your Cloudflare tunnel token into .env
-docker compose build
-docker compose up -d
+docker compose up -d          # pulls ghcr.io/catsec/sitesweep:latest (amd64/arm64)
 ```
+
+The image is published by GitHub Actions to **`ghcr.io/catsec/sitesweep`** as a
+multi-arch manifest, so the same tag runs on Intel/AMD64 and arm64 (Apple Silicon,
+Graviton, Pi 64-bit). To build locally instead of pulling, uncomment `build: .` in
+`docker-compose.yml` and run `docker compose build`.
 
 Two services come up:
 

@@ -1,7 +1,10 @@
 services:
   sitesweep:
-    build: .
-    image: sitesweep:1.0
+    # Pulls the multi-arch image (amd64/arm64) published by the GitHub Actions
+    # build workflow. To build locally instead, run: docker compose build
+    # (uncomment the `build: .` line below).
+    image: ghcr.io/catsec/sitesweep:latest
+    # build: .
     container_name: sitesweep
 
     # --- hardening ---
